@@ -2,101 +2,78 @@ import numpy as np
 import random
 import heapq
 import matplotlib.pyplot as plt
-
-DIRS = [(0, 1), (1, 0), (0, -1), (-1, 0)]
-
-def in_bounds(p, H, W): return 0 <= p[0] < H and 0 <= p[1] < W
-
-def neighbors(p, H, W, grid):
-    for dr, dc in DIRS:
-        nr, nc = p[0] + dr, p[1] + dc
-        if in_bounds((nr, nc), H, W) and grid[nr, nc] == 0: yield (nr, nc)
-
-def manhattan(a, b): return abs(a[0] - b[0]) + abs(a[1] - b[1])
+from matplotlib.animation import FuncAnimation
 
 def astar(start, goal, H, W, grid):
-    open_set = []
-    heapq.heappush(open_set, (manhattan(start, goal), 0, start, None))
-    came = {}
-    g = {start: 0}
+    def h(a, b): return abs(a[0]-b[0]) + abs(a[1]-b[1])
+    open_set = [(h(start, goal), 0, start, None)]; came = {}; g = {start: 0}
     while open_set:
-        f, dist, cur, parent = heapq.heappop(open_set)
-        if cur in came: continue
-        came[cur] = parent
+        _, dist, cur, parent = heapq.heappop(open_set)
         if cur == goal:
-            path = []
-            p = cur
-            while p:
-                path.append(p)
-                p = came[p] if p in came else None
+            path = []; 
+            while cur: path.append(cur); cur = came.get(cur)
             return path[::-1]
-        for nb in neighbors(cur, H, W, grid):
-            nd = dist + 1
-            if nb not in g or nd < g[nb]:
-                g[nb] = nd
-                heapq.heappush(open_set, (nd + manhattan(nb, goal), nd, nb, cur))
+        if cur in came and g.get(cur,float('inf'))<dist: continue
+        came[cur] = parent
+        for dr, dc in [(0,1),(1,0),(0,-1),(-1,0)]:
+            nr, nc = cur[0]+dr, cur[1]+dc
+            if 0<=nr<H and 0<=nc<W and grid[nr,nc]==0:
+                if dist+1 < g.get((nr,nc),float('inf')):
+                    g[(nr,nc)]=dist+1; heapq.heappush(open_set, (dist+1+h((nr,nc),goal), dist+1, (nr,nc), cur))
     return None
 
-class GridWorld:
-    def __init__(self, H, W):
-        self.H, self.W = H, W
-        self.grid = np.zeros((H, W), dtype=int)
-    def add_walls(self, prob=0.07, seed=0):
-        random.seed(seed)
-        for r in range(self.H):
-            for c in range(self.W):
-                if random.random() < prob: self.grid[r, c] = 1
-
-class Agent:
-    def __init__(self, id, start):
-        self.id = id
-        self.pos = start
-        self.path = [start]
-        self.history = [start]
-        self.task = None
-    def step(self):
-        if len(self.path) > 1:
-            self.path = self.path[1:]
-            self.pos = self.path[0]
-            self.history.append(self.pos)
-
-# --- Main Execution ---
 H, W = 14, 14
-world = GridWorld(H, W)
-world.add_walls(prob=0.07, seed=13)
+grid = np.zeros((H, W), dtype=int)
+random.seed(13)
+for r in range(H):
+    for c in range(W):
+        if random.random() < 0.07: grid[r, c] = 1
 
-agents = [Agent(0, (0, 0)), Agent(1, (H-1, W-1)), Agent(2, (H-1, 0))]
-resources = {(random.randint(1, H-2), random.randint(1, W-2)) for _ in range(10)}
-task_queue = list(resources)
+agents = [{'pos':p, 'path':[], 'task':None} for p in [(0,0), (H-1,W-1), (H-1,0)]]
+resources = [(random.randint(1,H-2), random.randint(1,W-2)) for _ in range(12)]
+queue = list(resources)
 
-t = 0
-while task_queue and t < 600:
-    t += 1
+frames = []
+max_steps = 500
+
+for _ in range(max_steps):
+    if not queue and all(not a['task'] for a in agents): break
+    
     for a in agents:
-        if a.task is None and task_queue:
-            a.task = task_queue.pop(0)
+        if not a['task'] and queue:
+            a['task'] = queue.pop(0)
+            path = astar(a['pos'], a['task'], H, W, grid)
+            if path: a['path'] = path
         
-        if a.task:
-            p = astar(a.pos, a.task, H, W, world.grid)
-            if p: a.path = p
-            
-        a.step()
-        if a.pos == a.task:
-            a.task = None
+        if a['path']:
+            if len(a['path']) > 1: a['path'].pop(0); a['pos'] = a['path'][0]
+        
+        if a['pos'] == a['task']:
+            a['task'] = None
 
-print(f"Collected resources: approx {len(resources)} (distributed among agents).")
+    active_res = list(queue) + [a['task'] for a in agents if a['task']]
+    frames.append({'agents': [a['pos'] for a in agents], 'res': active_res})
 
-# Visualization
-canvas = np.ones((H, W, 3)) * 0.95
-canvas[world.grid == 1] = np.array([0.1, 0.1, 0.1])
-for rsrc in resources: canvas[rsrc] = np.array([0.8, 0.5, 0.2])
-for a in agents:
-    for h in a.history: canvas[h] = np.array([0.8, 0.9, 0.9])
-    r, c = a.pos
-    canvas[r, c] = np.array([0.2 + 0.3 * (a.id % 3), 0.2 + 0.4 * ((a.id + 1) % 3), 0.3 + 0.3 * ((a.id + 2) % 3)])
+print(f"Simulation complete. Frames: {len(frames)}")
+fig, ax = plt.subplots(figsize=(6, 6))
+fig.patch.set_facecolor('#3E2723')
 
-plt.figure(figsize=(6, 6))
-plt.imshow(canvas)
-plt.title('Resource Collection Final')
-plt.axis('off')
+def render(frame):
+    ax.clear(); ax.axis('off')
+    data = frames[frame]
+    
+    canvas = np.zeros((H, W, 3)) + 0.2
+    canvas[grid==1] = [0.1, 0.05, 0.05]
+    ax.imshow(canvas, extent=[0, W, H, 0])
+
+    for r in data['res']:
+        ax.scatter(r[1], r[0], c='#FFD700', marker='h', s=150, edgecolors='orange')
+    
+    for pos in data['agents']:
+        ax.scatter(pos[1], pos[0], c='#CDDC39', s=180, edgecolors='black')
+        
+    ax.set_title(f"MINING BOTS | Remaining: {len(data['res'])}", color='white')
+    ax.set_xlim(-0.5, W-0.5); ax.set_ylim(H-0.5, -0.5)
+
+anim = FuncAnimation(fig, render, frames=len(frames), interval=100, repeat=False)
 plt.show()

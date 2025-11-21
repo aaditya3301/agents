@@ -2,99 +2,125 @@ import numpy as np
 import random
 import heapq
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 
-DIRS = [(0, 1), (1, 0), (0, -1), (-1, 0)]
-
-def in_bounds(p, H, W): return 0 <= p[0] < H and 0 <= p[1] < W
-
-def neighbors(p, H, W, grid):
-    for dr, dc in DIRS:
-        nr, nc = p[0] + dr, p[1] + dc
-        if in_bounds((nr, nc), H, W) and grid[nr, nc] == 0: yield (nr, nc)
-
-def manhattan(a, b): return abs(a[0] - b[0]) + abs(a[1] - b[1])
-
+# --- 1. Logic Core: A* Pathfinding ---
 def astar(start, goal, H, W, grid):
-    open_set = []
-    heapq.heappush(open_set, (manhattan(start, goal), 0, start, None))
-    came = {}
-    g = {start: 0}
+    def h(a, b): return abs(a[0]-b[0]) + abs(a[1]-b[1])
+    # Priority Queue: (f_score, g_score, current_node, parent_node)
+    open_set = [(h(start, goal), 0, start, None)]
+    came_from = {}
+    g_score = {start: 0}
+    
     while open_set:
-        f, dist, cur, parent = heapq.heappop(open_set)
-        if cur in came: continue
-        came[cur] = parent
+        _, dist, cur, parent = heapq.heappop(open_set)
+        
+        # Skip if we found a shorter way to this node already
+        if cur in came_from and g_score.get(cur, float('inf')) < dist:
+            continue
+            
+        came_from[cur] = parent
+        
         if cur == goal:
             path = []
-            p = cur
-            while p:
-                path.append(p)
-                p = came[p] if p in came else None
-            return path[::-1]
-        for nb in neighbors(cur, H, W, grid):
-            nd = dist + 1
-            if nb not in g or nd < g[nb]:
-                g[nb] = nd
-                heapq.heappush(open_set, (nd + manhattan(nb, goal), nd, nb, cur))
+            while cur:
+                path.append(cur)
+                cur = came_from[cur]
+            return path[::-1] # Return reversed path
+            
+        for dr, dc in [(0,1), (1,0), (0,-1), (-1,0)]:
+            nr, nc = cur[0]+dr, cur[1]+dc
+            if 0 <= nr < H and 0 <= nc < W and grid[nr, nc] == 0:
+                new_g = dist + 1
+                if new_g < g_score.get((nr, nc), float('inf')):
+                    g_score[(nr, nc)] = new_g
+                    heapq.heappush(open_set, (new_g + h((nr, nc), goal), new_g, (nr, nc), cur))
     return None
 
-class GridWorld:
-    def __init__(self, H, W):
-        self.H, self.W = H, W
-        self.grid = np.zeros((H, W), dtype=int)
-    def add_walls(self, prob=0.05, seed=0):
-        random.seed(seed)
-        for r in range(self.H):
-            for c in range(self.W):
-                if random.random() < prob: self.grid[r, c] = 1
-
-class Agent:
-    def __init__(self, id, start):
-        self.id = id
-        self.pos = start
-        self.path = [start]
-        self.history = [start]
-        self.task = None
-    def step(self):
-        if len(self.path) > 1:
-            self.path = self.path[1:]
-            self.pos = self.path[0]
-            self.history.append(self.pos)
-
+# --- 2. Setup World ---
 H, W = 14, 14
-world = GridWorld(H, W)
-world.add_walls(prob=0.05, seed=11)
-starts = [(0, 0), (H-1, 0), (0, W-1)]
-agents = [Agent(i, s) for i, s in enumerate(starts)]
-items = [(random.randint(1, H-2), random.randint(1, W-2)) for _ in range(8)]
-remaining = set(items)
+grid = np.zeros((H, W), dtype=int)
+random.seed(11)
+for r in range(H):
+    for c in range(W):
+        if random.random() < 0.05: grid[r, c] = 1
 
-t = 0
-while remaining and t < 400:
-    remaining_list = list(remaining)
-    for a in agents:
-        if a.task is None and remaining_list:
-            a.task = min(remaining_list, key=lambda x: manhattan(a.pos, x))
+# Agents: [id, start_pos, color]
+agents = [
+    {'id': 0, 'pos': (0, 0), 'path': [], 'task': None, 'color': '#FFC107'}, # Amber
+    {'id': 1, 'pos': (H-1, 0), 'path': [], 'task': None, 'color': '#03A9F4'}, # Light Blue
+    {'id': 2, 'pos': (0, W-1), 'path': [], 'task': None, 'color': '#8BC34A'}  # Light Green
+]
+
+items = set((random.randint(1, H-2), random.randint(1, W-2)) for _ in range(8))
+
+# --- 3. Simulation Loop ---
+frames = []
+max_steps = 300
+
+for _ in range(max_steps):
+    # Stop condition: No items left AND all agents have stopped moving
+    if not items and all(not a['path'] for a in agents):
+        break
     
+    # 1. Assign Tasks
     for a in agents:
-        if a.task:
-            p = astar(a.pos, a.task, H, W, world.grid)
-            if p: a.path = p
-        a.step()
-        if a.pos == a.task:
-            remaining.discard(a.task)
-            a.task = None
-    t += 1
+        if not a['task'] and items:
+            # Find closest item
+            target = min(items, key=lambda x: abs(x[0]-a['pos'][0]) + abs(x[1]-a['pos'][1]))
+            a['task'] = target
+            path = astar(a['pos'], target, H, W, grid)
+            if path:
+                a['path'] = path
+            else:
+                # If path fails (blocked), reset task
+                a['task'] = None
 
-canvas = np.ones((H, W, 3)) * 0.95
-canvas[world.grid == 1] = np.array([0.1, 0.1, 0.1])
-for it in items: canvas[it] = np.array([0.8, 0.4, 0.0])
-for a in agents:
-    for p in a.history: canvas[p] = np.array([0.7, 0.9, 0.9])
-    r, c = a.pos
-    canvas[r, c] = np.array([0.2 + 0.3 * (a.id % 3), 0.2 + 0.4 * ((a.id + 1) % 3), 0.3 + 0.3 * ((a.id + 2) % 3)])
+    # 2. Move Agents
+    for a in agents:
+        if a['path']:
+            if len(a['path']) > 1:
+                a['path'].pop(0)       # Remove current position
+                a['pos'] = a['path'][0] # Move to next
+        
+        # 3. Check Pickup
+        if a['task'] and a['pos'] == a['task']:
+            if a['pos'] in items:
+                items.remove(a['pos'])
+            a['task'] = None
+            a['path'] = [] 
 
-plt.figure(figsize=(6, 6))
-plt.imshow(canvas)
-plt.title('Warehouse Pickup Final')
-plt.axis('off')
+    frames.append({'agents': [a['pos'] for a in agents], 'items': list(items)})
+
+# --- 4. Visualization ---
+print(f"Simulation finished. Total frames: {len(frames)}")
+fig, ax = plt.subplots(figsize=(6, 6))
+fig.patch.set_facecolor('#263238') # Industrial Dark Grey
+
+def render(frame):
+    ax.clear()
+    ax.axis('off')
+    data = frames[frame]
+    
+    # Draw Floor
+    canvas = np.zeros((H, W, 3)) + 0.15
+    canvas[grid == 1] = [0.05, 0.05, 0.05]
+    ax.imshow(canvas, extent=[0, W, H, 0])
+
+    # Draw Items (Crates)
+    if data['items']:
+        iy, ix = zip(*data['items'])
+        ax.scatter(ix, iy, c='#FF5722', s=150, marker='s', edgecolors='black', linewidth=2, label='Crate')
+
+    # Draw Agents
+    for i, pos in enumerate(data['agents']):
+        ax.scatter(pos[1], pos[0], c=agents[i]['color'], s=200, edgecolors='white', linewidth=2, zorder=10)
+        ax.text(pos[1], pos[0], str(i), ha='center', va='center', color='black', fontweight='bold', fontsize=8)
+
+    status = "WORKING" if data['items'] else "COMPLETE"
+    ax.set_title(f"WAREHOUSE | Items Left: {len(data['items'])} | {status}", color='white')
+    ax.set_xlim(-0.5, W-0.5)
+    ax.set_ylim(H-0.5, -0.5)
+
+anim = FuncAnimation(fig, render, frames=len(frames), interval=100, repeat=False)
 plt.show()

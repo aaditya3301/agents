@@ -2,106 +2,85 @@ import numpy as np
 import random
 from collections import deque
 import matplotlib.pyplot as plt
-
-DIRS = [(0, 1), (1, 0), (0, -1), (-1, 0)]
-
-def in_bounds(p, H, W): return 0 <= p[0] < H and 0 <= p[1] < W
-
-def neighbors(p, H, W, grid):
-    for dr, dc in DIRS:
-        nr, nc = p[0] + dr, p[1] + dc
-        if in_bounds((nr, nc), H, W) and grid[nr, nc] == 0: yield (nr, nc)
-
-def manhattan(a, b): return abs(a[0] - b[0]) + abs(a[1] - b[1])
+from matplotlib.animation import FuncAnimation
 
 def bfs(start, goals, H, W, grid):
-    q = deque([start])
-    parent = {start: None}
+    q = deque([start]); parent = {start: None}; visited = {start}
     while q:
         cur = q.popleft()
         if cur in goals:
-            path = []
-            p = cur
-            while p:
-                path.append(p)
-                p = parent[p]
+            path = []; 
+            while cur: path.append(cur); cur = parent[cur]
             return path[::-1]
-        for nb in neighbors(cur, H, W, grid):
-            if nb not in parent:
-                parent[nb] = cur
-                q.append(nb)
+        for dr, dc in [(0,1),(1,0),(0,-1),(-1,0)]:
+            nr, nc = cur[0]+dr, cur[1]+dc
+            if 0<=nr<H and 0<=nc<W and grid[nr,nc]==0 and (nr,nc) not in visited:
+                visited.add((nr,nc)); parent[(nr,nc)]=cur; q.append((nr,nc))
     return None
 
-class GridWorld:
-    def __init__(self, H, W):
-        self.H, self.W = H, W
-        self.grid = np.zeros((H, W), dtype=int)
-    def add_walls(self, prob=0.03, seed=0):
-        random.seed(seed)
-        for r in range(self.H):
-            for c in range(self.W):
-                if random.random() < prob: self.grid[r, c] = 1
-
-class Agent:
-    def __init__(self, id, start):
-        self.id = id
-        self.pos = start
-        self.path = [start]
-        self.history = [start]
-        self.task = None
-    def step(self):
-        if len(self.path) > 1:
-            self.path = self.path[1:]
-            self.pos = self.path[0]
-            self.history.append(self.pos)
-
-# --- Main Execution ---
 H, W = 16, 16
-world = GridWorld(H, W)
-world.add_walls(prob=0.03, seed=21)
+grid = np.zeros((H, W), dtype=int)
+random.seed(21)
+for r in range(H):
+    for c in range(W): 
+        if random.random() < 0.03: grid[r, c] = 1
 
-ffs = [Agent(0, (0, 0)), Agent(1, (0, W-1)), Agent(2, (H-1, W-1))]
-fires = {(random.randint(3, H-4), random.randint(3, W-4)) for _ in range(6)}
+agents = [{'pos':p, 'path':[], 'task':None} for p in [(0,0), (0,W-1), (H-1,W-1)]]
+fires = {(random.randint(3,H-4), random.randint(3,W-4)) for _ in range(5)}
 
-t = 0
-while fires and t < 300:
-    # Greedy assignment
-    for f in ffs:
-        if f.task is None and fires:
-            f.task = min(fires, key=lambda x: manhattan(f.pos, x))
-            
-    for f in ffs:
-        if f.task:
-            p = bfs(f.pos, {f.task}, H, W, world.grid)
-            if p: f.path = p
-        f.step()
+frames = []
+for _ in range(400):
+    if not fires: break
+    
+    # Assign
+    for a in agents:
+        if not a['task'] and fires:
+            a['task'] = min(fires, key=lambda x: abs(x[0]-a['pos'][0]) + abs(x[1]-a['pos'][1]))
+            path = bfs(a['pos'], {a['task']}, H, W, grid)
+            if path: a['path'] = path
+    
+    # Move & Extinguish
+    for a in agents:
+        if a['path']:
+            if len(a['path']) > 1: a['path'].pop(0); a['pos'] = a['path'][0]
         
-        if f.pos == f.task and f.pos in fires:
-            fires.remove(f.pos)
-            f.task = None
+        if a['pos'] in fires:
+            fires.remove(a['pos'])
+            a['task'] = None
+            a['path'] = []
 
-    # Fire Spread
-    newfires = set(fires)
-    for fire in list(fires):
-        for nb in neighbors(fire, H, W, world.grid):
-            if random.random() < 0.08: # Spread probability
-                newfires.add(nb)
-    fires = newfires
-    t += 1
+    # Spread
+    new_fires = set(fires)
+    for f in fires:
+        for dr, dc in [(0,1),(1,0),(0,-1),(-1,0)]:
+            nr, nc = f[0]+dr, f[1]+dc
+            if 0<=nr<H and 0<=nc<W and grid[nr,nc]==0:
+                if random.random() < 0.05: # 5% spread chance
+                    new_fires.add((nr, nc))
+    fires = new_fires
+    
+    frames.append({'agents': [a['pos'] for a in agents], 'fires': list(fires)})
 
-print("Remaining fires approx:", len(fires))
+fig, ax = plt.subplots(figsize=(6, 6))
+fig.patch.set_facecolor('black')
 
-# Visualization
-canvas = np.ones((H, W, 3)) * 0.95
-canvas[world.grid == 1] = np.array([0.1, 0.1, 0.1])
-for fr in fires: canvas[fr] = np.array([0.9, 0.3, 0.2])
-for f in ffs:
-    for h in f.history: canvas[h] = np.array([0.8, 0.9, 0.9])
-    r, c = f.pos
-    canvas[r, c] = np.array([0.2 + 0.3 * (f.id % 3), 0.2 + 0.4 * ((f.id + 1) % 3), 0.3 + 0.3 * ((f.id + 2) % 3)])
+def render(frame):
+    ax.clear(); ax.axis('off')
+    data = frames[frame]
+    
+    canvas = np.zeros((H, W, 3)) + 0.1
+    canvas[grid==1] = [0.3, 0.3, 0.3]
+    ax.imshow(canvas, extent=[0, W, H, 0])
 
-plt.figure(figsize=(6, 6))
-plt.imshow(canvas)
-plt.title('Cooperative Firefighters Final')
-plt.axis('off')
+    if data['fires']:
+        fy, fx = zip(*data['fires'])
+        ax.scatter(fx, fy, c='#FF3D00', s=120, marker='^', alpha=0.8, label='Fire')
+
+    for pos in data['agents']:
+        ax.scatter(pos[1], pos[0], c='#2962FF', s=180, marker='o', edgecolors='white')
+
+    ax.set_title(f"FIREFIGHTERS | Active Fires: {len(data['fires'])}", color='white')
+    ax.set_ylim(H-0.5, -0.5); ax.set_xlim(-0.5, W-0.5)
+
+anim = FuncAnimation(fig, render, frames=len(frames), interval=100, repeat=False)
 plt.show()
